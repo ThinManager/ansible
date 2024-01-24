@@ -1,0 +1,2 @@
+[thinmanager]
+TMAnsible ansible_host=10.6.10.61 install_ftam=1 fta_serial_num=0123456789 fta_product_key=XXXXX-XXXXX fta_qty=1

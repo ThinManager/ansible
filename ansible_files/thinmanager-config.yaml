@@ -1,0 +1,704 @@
+---
+# This playbook performs some initial configuration of ThinManager v13.2.0, leveraging the REST API.  It first logs into the
+# the ThinManager REST API using the credentials supplied in the tm_service_username_upn and tm_service_password variables.  This
+# initial REST API call returns an API key to be used in the other REST API plays.
+
+# The first action performed is to set a ThinManager configuration database password (tm_db_password).
+
+# The playbook then attempts to activate ThinManager based on the install_ftam host variable (if set to a 1, ThinManager is
+# configured for FTA - if set to a 0, ThinManager is configured for TMA).
+
+# With activation handled, the playbook then demonstrates how to create an RDS Display Server, RDS Display Client, and a Terminal.
+# The best way to explore ThinManager's REST API is by using the built-in Swagger User Interface, which can be accessed by:
+# https://x.x.x.x:8443/api/documentation.  Here you will see all of the REST API endpoints that ThinManager supports, and can try each
+# one out.  By trying out an endpoint in the Swagger UI, you can see what Body each endpoint expects, which can then be used to
+# body_text variable in each play below.
+
+# The last play in this playbook sets some initial ThinManager Server settings - like enabling the PXE Server and disabling
+# Device Authentication.  This was placed at the end of the playbook because enabling the PXE Server takes more time for ThinManager
+# to process, and subsequent REST API calls made immediately to ThinManager after enabling PXE would sometimes fail.
+
+- name: Configure ThinManager v13.2.0
+  hosts: "{{ NODES }}"
+
+  vars:
+    tm_service_username_upn: "tmservice@tmlab.loc"
+    tm_service_password: "rw"
+    tm_db_password: "rw"   
+    tm_license_path: "c:\\Tools\\Installs\\"
+    tm_license_file: "TMA.lic"
+
+  tasks:
+    - name: Login to REST API to obtain an API key for subsequent calls
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/login
+        validate_certs: false
+        method: POST
+        return_content: true
+        body:
+          Username: "{{ tm_service_username_upn }}"
+          Password: "{{ tm_service_password }}"
+      register: api_logon_data
+
+    - name: Set ThinManager database configuration password
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/system/configuration/password
+        validate_certs: false
+        method: PUT
+        body: "{ 'Password' : '{{ tm_db_password }}', 'CurrentPassword' : '' }"
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+
+    - name: Get TMA OS install ID in order to activate TMA license at downloads.thinmanager.com (will require Product key to activate)
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/system/licensing/tma/installids
+        validate_certs: false
+        method: GET
+        return_content: true
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      register: tma_install_ids
+      when: install_ftam != 1
+
+    - name: Prompt to download TMA license file to same location as this yaml file
+      pause:
+        prompt: "Please activate and download TMA license file using: \n\nOS Install ID = {{ tma_install_ids.json | json_query( query ) | first }} \n\nPress ENTER to continue, or Ctrl+c then 'a' to abort."
+      vars:
+        query: "[?Type=='OS'].InstallId"
+      when: install_ftam != 1
+
+    - name: Copy downloaded TMA license file to target machine
+      win_copy:
+        src: "./{{ tm_license_file }}"
+        dest: "{{ tm_license_path }}{{ tm_license_file}}"
+      when: install_ftam != 1
+
+# This play is currently commented out because there is an anomaly with this endpoint - fix to come
+# -------------------------------------------------------------------------------------------------
+#    - name: Install TMA license file
+#      win_uri:
+#        url: https://{{ ansible_ssh_host }}:8443/api/system/licensing/tma/license
+#        validate_certs: false
+#        method: POST
+#        body: "{ 'fileName' : '{{ tm_license_path }}{{ tm_license_file }}' }"
+#        headers:
+#          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+#      when: install_ftam != 1
+
+# This play is currently commented out because there is an anomaly with this endpoint - fix to come
+# -------------------------------------------------------------------------------------------------
+#    - name: Set licensing mode to FTA
+#      win_uri:
+#        url: https://{{ ansible_ssh_host }}:8443/api/system/licensingmode
+#        validate_certs: false
+#        method: PUT
+#        status_code: 200      
+#        body: "{{ body_json }}"          
+#        headers:
+#          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+#      vars:
+#        body_text: |-
+#          {
+#            "Mode": "FTA"
+#          }      
+#        body_json: "{{ body_text | to_json }}"
+#      when: (install_ftam == 1)
+
+    - name: Add FTA activation to ThinManager
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/system/licensing/fta/licenses
+        validate_certs: false
+        method: POST
+        status_code: 200      
+        body: "{{ body_json }}"          
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      vars:
+        body_text: |-
+          {
+            "SerialNumber": "{{ fta_serial_num }}",
+            "Feature": "TM.FLX.XLR",
+            "Count": {{ fta_qty }}
+          }      
+        body_json: "{{ body_text | to_json }}"
+      when: (install_ftam == 1) and
+            (fta_qty != 0)
+     
+    - name: Create RDS Display Server
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/displayservers/rds/server
+        validate_certs: false
+        method: POST
+        return_content: true  
+        status_code: 201      
+        body: "{{ body_json }}"
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      register: rds_displayserver_response
+      vars:
+        body_text: |-
+          {
+            "ParentId": 0,
+            "Name": "{{ inventory_hostname }}",
+            "IPAddress": "{{ ansible_ssh_host }}",
+            "Disabled": false,
+            "Username": "{{ tm_service_username_upn }}",
+            "Password": "{{ tm_service_password }}",
+            "Domain": "",
+            "Schedule": null,
+            "DataGathering": {
+              "SmartSessionInterval": 8,
+              "ProcessInterval": 5,
+              "SessionInterval": 8
+            },
+            "SmartSession": {
+              "Enabled": false,
+              "Config": null
+            },
+            "Priority": 0
+          }
+        body_json: "{{ body_text | to_json }}"    
+
+    - name: Create RDS Display Client
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/displayclients/rds/client
+        validate_certs: false
+        method: POST
+        return_content: true  
+        status_code: 201      
+        body: "{{ body_json }}"
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      register: rds_displayclient_response
+      vars:
+        body_text: |-
+          {
+            "ParentId": 0,
+            "Name": "rds_displayclient_1",
+            "DisplayName": "",
+            "ClientOptions": {
+              "AllowTile": true,
+              "AllowMovement": true,
+              "IncludeCameraOverlays": false,
+              "IncludeVirtualScreens": false,
+              "DelayUntilUser": false
+            },
+            "ConnectionOptions": {
+              "MaintainMonitorConnection": true,
+              "ConnectAtBoot": true,
+              "DisconnectInBackground": false,
+              "AllowUserDisconnect": false
+            },
+            "RDSOptions": {
+              "AllowAutoLogin": true,
+              "UseAppLink": true,
+              "UseSmartSession": false,
+              "UseEnforcePrimary": false,
+              "UseInstantFailover": false
+            },
+            "SessionScaling": {
+              "MaintainAspectRatio": false,
+              "ScaleDownOnly": false
+            },
+            "SessionResolution": {
+              "DontUseScreenResolution": false,
+              "SessionWidth": 0,
+              "SessionHeight": 0
+            },
+            "RDHosts": [
+              {
+                "Id": {{ rds_displayserver_response.json | json_query('Id') }}
+              }
+            ],
+            "RDGateway": {
+              "UseGatewayServer": false,
+              "BypassGatewayForLocal": false
+            },
+            "AppLink": {
+              "ProgramPath": "C:\\Windows\\notepad.exe",
+              "CommandLine": "\"C:\\Tools\\Installs\\JSON.txt\"",
+              "InitialDirectory": ""
+            },
+            "CameraOverlays": null,
+            "VirtualScreenOverlays": null
+          }
+        body_json: "{{ body_text | to_json }}"    
+        
+    - name: Create Terminal
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/terminals/terminal
+        validate_certs: false
+        method: POST
+        return_content: true  
+        status_code: 201      
+        body: "{{ body_json }}"          
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      register: terminal_response
+      vars:
+        body_text: |-
+          {
+            "GroupId": 0,
+            "Disabled": false,
+            "Name": "terminal_1",
+            "Description": "",
+            "Hardware": {
+              "Model": "Allen-Bradley 6300T-BB",
+              "FirmwarePackage": "",
+              "Mac": "",
+              "SecondaryMAC": "",
+              "VideoPCIID": "",
+              "NetworkPCIID": ""
+            },
+            "CustomVariables": null,
+            "Permissions": [
+              "Unrestricted"
+            ],
+            "TerminalOptions": {
+              "GroupSetting": "None",
+              "Replaceable": true,
+              "AdminModeAtStartup": false,
+              "EnforceBootPriority": false
+            },
+            "Schedule": {
+              "GroupSetting": "None",
+              "Enable": false,
+              "Events": null
+            },
+            "TerminalEffects": {
+              "GroupSetting": "None",
+              "Enable": true,
+              "ShowStatusMessages": true
+            },
+            "Shadowing": {
+              "GroupSetting": "None",
+              "Allow": "YES",
+              "AllowInteractive": true
+            },
+            "UserServices": {
+              "GroupSetting": "None",
+              "Enable": false
+            },
+            "LocationServices": {
+              "GroupSetting": "None",
+              "Enable": false
+            },
+            "ContainerHosting": {
+              "GroupSetting": "None",
+              "EnableHosting": false,
+              "EnableRemoteHosting": false,
+              "RamDiskSize": 4
+            },
+            "LoginRequirements": {
+              "GroupSetting": "None",
+              "Manual": {
+                "Password": false,
+                "Pin": false
+              },
+              "Card": {
+                "Password": false,
+                "Pin": false
+              },
+              "Biometric": {
+                "Password": false,
+                "Pin": false
+              },
+              "Relevance": {
+                  "Password": false,
+                  "Pin": false
+                }
+              },
+              "LoginMethods": {
+              "GroupSetting": "None",
+              "Manual": true,
+              "Card": true,
+              "Biometric": true,
+              "Relevance": true
+            },
+            "Screens": [
+              {
+                "XPosition": 0,
+                "YPosition": 0,
+                "ScreenOptions": null,
+                "Monitors": [
+                  {
+                    "Number": 1,
+                    "HorizontalResolution": 1920,
+                    "VerticalResolution": 1080,
+                    "RefreshRate": 60,
+                    "ColorDepth": 16,
+                    "XPosition": 0,
+                    "YPosition": 0,
+                    "Rotation": 0
+                  }
+                ],
+                "DisplayClients": [
+                  {
+                    "Id": {{ rds_displayclient_response.json | json_query('Id') }},
+                    "Overrides": null
+                  }
+                ]
+              }
+            ],
+            "DisplayClientSelectionOptions": {
+              "GroupSetting": "None",
+              "ShowSelector": true,
+              "AutoHideSelector": true,
+              "TileOnSelectorActivation": false,
+              "SelectorSize": 14,
+              "EnableTiling": false,
+              "TileShowGrid": true,
+              "TileInactiveTime": 60,
+              "TileOnStartup": false,
+              "TileOnRightClick": false,
+              "TileWithMainMenu": false,
+              "TileInteractive": false,
+              "ScreenEdgeSelection": false,
+              "AllowDisplayClientMove": false
+            },
+            "MainMenuOptions": {
+              "GroupSetting": "None",
+              "AllowReboot": false,
+              "ShowMainMenu": true,
+              "ShowVirtualKeyboard": false
+            },
+            "PinPadOptions": {
+              "GroupSetting": "None",
+              "PinPadReverseOrientation": false,
+              "PinPadSize": 50,
+              "PinPadShowBeedback": true
+            },
+            "LocationOptions": null,
+            "TerminalHotkeys": {
+              "GroupSetting": "None",
+              "Hotkeys": null
+            },
+            "MouseButtonMapping": {
+              "GroupSetting": "None",
+              "Mapping": {
+                "1": "NONE",
+                "2": "NONE",
+                "3": "NONE",
+                "4": "NONE",
+                "5": "NONE",
+                "6": "NONE",
+                "7": "NONE",
+                "8": "NONE",
+                "9": "NONE",
+                "10": "NONE",
+                "11": "NONE",
+                "12": "NONE"
+              }
+            },
+            "WindowsLogin": {
+              "Username": "{{ tm_service_username_upn }}",
+              "Password": "{{ tm_service_password }}",
+              "Domain": ""
+            },
+            "WintmcSettings": null,
+            "MobileSettings": null,
+            "Modules": null,
+            "ThinServerMonitorList": {
+              "GroupSetting": "None",
+              "SpecifyThinServers": false,
+              "ThinServers": null
+            },
+            "ConnectionMonitorSettings": {
+              "GroupSetting": "None",
+              "PingTimeout": 1,
+              "PingRetry": 3,
+              "MonitorInterval": 5
+            }
+          }      
+        body_json: "{{ body_text | to_json }}"    
+        
+    - name: Add Windows credentials to Terminal just created
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/terminals/terminal/{{ terminal_response.json | json_query('Id') }}/windowslogin
+        validate_certs: false
+        method: PUT
+        status_code: 200      
+        body: "{{ body_json }}"          
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      register: terminal_response
+      vars:
+        body_text: |-
+          {
+            "Username": "{{ tm_service_username_upn }}",
+            "Password": "{{ tm_service_password }}",
+            "Domain": ""
+          }      
+        body_json: "{{ body_text | to_json }}"
+
+    - name: Set ThinManager System Settings - example below enables PXE and disables Device Authentication
+      win_uri:
+        url: https://{{ ansible_ssh_host }}:8443/api/system/settings
+        validate_certs: false
+        method: PUT
+        body: "{{ body_json }}"
+        headers:
+          X-API-KEY: "{{ api_logon_data.json | json_query('Key') }}"
+      vars:
+        body_text:
+          {
+            "UnknownTerminals": {
+              "Allow": true,
+              "Authentication": "None",
+              "EnableAutoCreate": true,
+              "AutoCreateMask": "AutoTerm"
+            },
+            "Replacement": {
+              "Enable": true,
+              "RequireLikeModel": false,
+              "AllowCreation": true
+            },
+            "DeviceAuthentication": {
+              "Enable": false,
+              "AllowLegacy": true
+            },
+            "HistoricalData": {
+              "MaintainDays": 1
+            },
+            "EventLog": {
+              "MaintainDays": 7,
+              "Events": [
+                "ThinServerStartStopEvent",
+                "TerminalServerConnectionEvent",
+                "TerminalConnectionEvent",
+                "TerminalConfigEvent",
+                "UserConfigEvent",
+                "InstallFirmwareEvent",
+                "InstallTermcapEvent",
+                "InstallLicenseEvent",
+                "TermMonitorEvent",
+                "SyncEvent",
+                "AccountSyncEvent",
+                "LocationConfigEvent",
+                "DisplayClientConfigEvent",
+                "DisplayServerConfigEvent",
+                "ContainerHostStatusEvent",
+                "LicenseEvent",
+                "ThinServerConfigEvent",
+                "Event"
+              ]
+            },
+            "SysLog": {
+              "ServerAddress": "",
+              "Protocol": "udp",
+              "Port": 514,
+              "Events": []
+            },
+            "Schedule": null,
+            "SecurityGroups": [
+              {
+                "Group": "Administrators",
+                "Permissions": [
+                  "Connect",
+                  "Shadow",
+                  "Interactive Shadow",
+                  "Reset Sessions",
+                  "Kill Processes",
+                  "Reboot Terminal Servers",
+                  "Connect To Terminal Servers",
+                  "Logoff TermSecure Users",
+                  "ThinServer Administration",
+                  "Create Terminals",
+                  "Create Users",
+                  "Create Application Groups",
+                  "Create Terminal Servers",
+                  "Edit Terminals",
+                  "Edit Users",
+                  "Edit Application Groups",
+                  "Edit Terminal Servers",
+                  "Install Files",
+                  "Calibrate Touchscreens",
+                  "Reboot Terminals",
+                  "Restart Terminals",
+                  "Schedule Events",
+                  "Change Licenses",
+                  "Allow Printing",
+                  "Create Cameras",
+                  "Edit Cameras",
+                  "View Cameras",
+                  "Create VMWare",
+                  "Edit VMWare",
+                  "VMWare Operations",
+                  "Create DHCP",
+                  "Edit DHCP",
+                  "Create Package",
+                  "Edit Package",
+                  "Create Location",
+                  "Edit Location",
+                  "Logoff Location",
+                  "Create Resolver",
+                  "Edit Resolver",
+                  "Replace Terminal",
+                  "ThinManager Server List",
+                  "Create VNC",
+                  "Edit VNC",
+                  "Create Container",
+                  "Edit Container",
+                  "Create Events",
+                  "Edit Events"
+                ]
+              },
+              {
+                "Group": "ThinManager Administrators",
+                "Permissions": [
+                  "Connect",
+                  "Shadow",
+                  "Interactive Shadow",
+                  "Reset Sessions",
+                  "Kill Processes",
+                  "Reboot Terminal Servers",
+                  "Connect To Terminal Servers",
+                  "Logoff TermSecure Users",
+                  "ThinServer Administration",
+                  "Create Terminals",
+                  "Create Users",
+                  "Create Application Groups",
+                  "Create Terminal Servers",
+                  "Edit Terminals",
+                  "Edit Users",
+                  "Edit Application Groups",
+                  "Edit Terminal Servers",
+                  "Install Files",
+                  "Calibrate Touchscreens",
+                  "Reboot Terminals",
+                  "Restart Terminals",
+                  "Schedule Events",
+                  "Change Licenses",
+                  "Allow Printing",
+                  "Create Cameras",
+                  "Edit Cameras",
+                  "View Cameras",
+                  "Create VMWare",
+                  "Edit VMWare",
+                  "VMWare Operations",
+                  "Create DHCP",
+                  "Edit DHCP",
+                  "Create Package",
+                  "Edit Package",
+                  "Create Location",
+                  "Edit Location",
+                  "Logoff Location",
+                  "Create Resolver",
+                  "Edit Resolver",
+                  "Replace Terminal",
+                  "ThinManager Server List",
+                  "Create VNC",
+                  "Edit VNC",
+                  "Create Container",
+                  "Edit Container",
+                  "Create Events",
+                  "Edit Events"
+                ]
+              },
+              {
+                "Group": "ThinManager Power Users",
+                "Permissions": [
+                  "Connect",
+                  "Shadow",
+                  "Reset Sessions",
+                  "Kill Processes",
+                  "Reboot Terminal Servers",
+                  "Connect To Terminal Servers",
+                  "Calibrate Touchscreens",
+                  "Reboot Terminals",
+                  "Restart Terminals",
+                  "View Cameras",
+                  "VMWare Operations"
+                ]
+              },
+              {
+                "Group": "ThinManager Users",
+                "Permissions": [
+                  "Connect"
+                ]
+              },
+              {
+                "Group": "ThinManager Shadow Users",
+                "Permissions": [
+                  "Connect",
+                  "Shadow"
+                ]
+              },
+              {
+                "Group": "ThinManager Interactive Shadow Users",
+                "Permissions": [
+                  "Connect",
+                  "Shadow",
+                  "Interactive Shadow"
+                ]
+              }
+            ],
+            "EventMessages": {
+              "Email": [],
+              "WindowsMessage": [],
+              "SMS": []
+            },
+            "TFTP": {
+              "EnableTFTP": true,
+              "MaxPacketSize": 1432,
+              "EnableFirewallCompatible": false,
+              "EnableMulticast": true,
+              "EnableSmartMulticast": true,
+              "SetDontFragment": true
+            },
+            "Multicast": {
+              "Address": "224.100.100.100",
+              "Port": 1758,
+              "TTL": 60
+            },
+            "IGMP": {
+              "Version": 2,
+              "TTL": 1
+            },
+            "HTTPS": {
+              "Enabled": true,
+              "Port": 8443
+            },
+            "API": {
+              "Enabled": true,
+              "AllowUserLogin": true,
+              "UserQuota": 1000,
+              "UserQuotaDuration": "Hour"
+            },
+            "Shadow": {
+              "Port": 5900
+            },
+            "Biometric": {
+              "Enabled": false,
+              "Format": "ISO_19794_2_2005",
+              "FalseMatchRate": ".0001"
+            },
+            "UserConfiguration": {
+              "LogonTimeout": 10
+            },
+            "DNS": {
+              "Enabled": false,
+              "Domain": "",
+              "SearchDomain": "",
+              "NameServers": []
+            },
+            "Language": {
+              "Language": ""
+            },
+            "ThinManagerServers": {
+              "AutoSync": false,
+              "AutoSyncServers": {
+                "Primary": null,
+                "Secondary": null
+              },
+              "Servers": null
+            },
+            "PXE": {
+              "Enabled": true,
+              "Interfaces": [],
+              "Ranges": null,
+              "Reservations": null
+            }
+          }        
+        body_json: "{{ body_text | to_json }}"    
+

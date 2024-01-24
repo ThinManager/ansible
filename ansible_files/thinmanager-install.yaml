@@ -1,0 +1,227 @@
+---
+# This playbook installs ThinManager v13.2.0.  You can control the activation method used by ThinManager by setting
+# install_ftam variable in the hosts file.  Setting it to a 1 will install FactoryTalk Activation Manager (FTAM), while setting
+# it to a 0 will use ThinManager Activation (and not install FTAM).  If using FTAM, you can also automatically activate the FTA
+# license by specifying the fta_serial_num, fta_product_key, and fta_qty variables also in the hosts file.  This will require
+# the target host to have access to the Internet to work.  This playbook utilizes the separate install of FactoryTalk Activation
+# Manager (v5.00.13) because this produced more consistent results with Ansible than the FTAM version included in the v13.2.0
+# installation folder of ThinManager.
+
+# We install the ThinManager MSI separate from the Common Installer in order to set the ENABLE_API argument to a 1 so we
+# can automate the initial configuration of ThinManager in a separate playbook.  Once the ThinManager MSI is installed, the
+# playbook will then install FactoryTalk Activation Manager if the install_ftam host variable is set to 1.
+
+# Once installation is completed, the playbook the configures the ThinServer service to run as a domain account that has local
+# Administrator permissions on the host.  The domain account credentials are specified in the tm_service_username and
+# tm_service_password variables.
+
+# Lastly, the playbook opens the commonly used ports on the Windows firewall.  The last 2 are commented out but can be included
+# if your deployment will utilize a Docker Container host and/or Active Directory.
+- name: Install ThinManager v13.2.0
+  hosts: "{{ NODES }}"
+  vars:
+
+    wfcu_msi: "{{ tm_install_path }}Redist\\WFCU_1.00.15\\Windows Firewall Configuration Utility 1.00.15.msi"
+    wfcu_msi_pid: "{FBB3A09F-589F-4756-9C76-62CDD3EF84B6}"
+    
+    tm_install_path: "c:\\Tools\\Installs\\13.2.0-ThinManager-Web\\"
+    tm_install_folder: "c:\\Program Files\\Rockwell Software\\ThinManager\\"
+    tm_service_username: "tmlab\\tmservice"
+    tm_service_password: "rw"
+    tm_msi: "{{ tm_install_path }}Common\\13.2.0-ThinManager\\ThinManager 13.2.msi"
+    tm_msi_pid: "{5591B03E-0EFA-4D14-BEE3-136FEB2C898A}"
+    tm_msi_args: "ENABLE_API=1 INSTALLFOLDER=\"{{ tm_install_folder }}\" ADDLOCAL=FirmwarePackages,ThinServer,ContainersImages,ThinManager"
+
+    dotnet_fx_48_cert_bat: "{{ tm_install_path }}Redist\\DotNETFX_4.8\\InstallCert.bat"
+    dotnet_fx_48_exe: "{{ tm_install_path }}Redist\\DotNETFX_4.8\\ndp48-x86-x64-allos-enu.exe"
+    dotnet_fx_48_exe_pid: "Microsoft .NET Framework"
+
+    ftam_install_path: "c:\\Tools\\Installs\\5.00.13-FTActivation-Web\\"
+    ftam_exe: "{{ ftam_install_path }}Setup.exe"
+    ftam_exe_pid: "{B0364B62-9E00-48E1-A36D-DCABBFD801D3}"
+    ftam_cmd_util: "c:\\Program Files (x86)\\Rockwell Software\\FactoryTalk Activation\\Tools\\FTACmdUtility.exe"
+    
+  tasks:
+    - name: Install Windows firewall configuration utility
+      win_package:
+        path: "{{ wfcu_msi }}"
+        product_id: "{{ wfcu_msi_pid }}"
+
+    - name: Install ThinManager MSI
+      win_package:
+        path: "{{ tm_msi }}"
+        product_id: "{{ tm_msi_pid }}"
+        arguments: "{{ tm_msi_args }}"
+
+    - name: Get .NET registry key value
+      win_reg_stat:
+        path: HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full
+        name: Release
+      register: dotnetversion
+
+    - name: Install .NET framework 4.8 (long task ~ 2 minutes to complete on my system)
+      win_package:
+        path: "{{ dotnet_fx_48_exe }}"
+        product_id: "{{ dotnet_fx_48_exe_pid }}"
+        arguments: /install /passive /norestart
+      register: dotnet_install
+      when: (dotnetversion.value != 528049) and 
+            (install_ftam == 1) 
+
+    - name: Reboot when .NET Framework install requires it (long task ~ 1m 15s to complete on my system)
+      win_reboot:
+        post_reboot_delay: 30
+      when: dotnet_install.reboot_required is defined
+    
+    - name: Install FactoryTalk Activation Manager (long task ~ 2m 20s to complete on my system)
+      win_package:
+        path: "{{ ftam_exe }}"
+        product_id: "{{ ftam_exe_pid }}"
+        arguments: /Q /IAcceptAllLicenseTerms /IgnoreWarning
+      register: ftam_install
+      when: install_ftam == 1
+
+    - name: Reboot when FactoryTalk Activation Manager install requires it
+      win_reboot:
+        post_reboot_delay: 30
+      when: (install_ftam == 1) and
+            (ftam_install is defined)
+
+    # This play will only work if your host has access to the internet - disable for each host by setting fta_qty in inventory to 0
+    - name: Activate FTA license included in Inventory for this target (long task ~ 2m 10s to complete on my system)
+      win_command:
+        cmd: '"{{ ftam_cmd_util }}" get -sn {{ fta_serial_num }} -pk {{ fta_product_key }} -q {{ fta_qty }}'
+      when: (install_ftam == 1) and
+            (fta_qty != 0)
+
+    # Best practice is for ThinServer service to run as a domain account with local Admin permissions
+    - name: Assign domain account to local Administrators group
+      win_group_membership:
+        name: Administrators
+        members:
+          - "{{ tm_service_username }}"      
+        state: present
+        
+    - name: Grant domain account the permission to run a service
+      win_user_right:
+        name: SeServiceLogonRight
+        users:
+          - "{{ tm_service_username }}"      
+        action: add
+
+    - name: Set ThinServer to run as a domain account
+      win_service:
+        name: ThinServer
+        state: restarted
+        username: "{{ tm_service_username }}"
+        password: "{{ tm_service_password }}"
+        
+    # Setup Windows firewall rules for ThinManager
+    - name: TCP2031 - proprietary ThinManager terminal protocol
+      win_firewall_rule:
+        name: TM_TCP2031
+        group: ThinManager
+        localport: 2031
+        action: allow
+        direction: in
+        protocol: tcp
+        profiles: domain
+        state: present
+        enabled: yes
+
+    - name: TCP5900 - terminal shadowing protocol
+      win_firewall_rule:
+        name: TM_TCP5900
+        group: ThinManager
+        localport: 5900
+        action: allow
+        direction: in
+        protocol: tcp
+        profiles: domain
+        state: present
+        enabled: yes
+
+    - name: UDP4900 - TFTP to ThinManager Ready thin clients
+      win_firewall_rule:
+        name: TM_UDP4900
+        group: ThinManager
+        localport: 4900
+        action: allow
+        direction: in
+        protocol: udp
+        profiles: domain
+        state: present
+        enabled: yes
+    
+    - name: TCP8443 - securely boot modules, container images
+      win_firewall_rule:
+        name: TM_TCP8443
+        group: ThinManager
+        localport: 8443
+        action: allow
+        direction: in
+        protocol: tcp
+        profiles: domain
+        state: present
+        enabled: yes
+
+    - name: UDP67 - ip address assignment if using PXE
+      win_firewall_rule:
+        name: TM_UDP67
+        group: ThinManager
+        localport: 67
+        action: allow
+        direction: in
+        protocol: udp
+        profiles: domain
+        state: present
+        enabled: yes
+        
+    - name: UDP69 - TFTP to ThinManager Compatible thin clients (PXE)
+      win_firewall_rule:
+        name: TM_UDP69
+        group: ThinManager
+        localport: 69
+        action: allow
+        direction: in
+        protocol: udp
+        profiles: domain
+        state: present
+        enabled: yes
+        
+    - name: UDP4011 - required for UEFI PXE clients
+      win_firewall_rule:
+        name: TM_UDP4011
+        group: ThinManager
+        localport: 4011
+        action: allow
+        direction: in
+        protocol: udp
+        profiles: domain
+        state: present
+        enabled: yes
+
+#    - name: TCP2376 - used by terminals to connect to a container host
+#      win_firewall_rule:
+#        name: TM_TCP2376
+#        group: ThinManager
+#        localport: 2376
+#        action: allow
+#        direction: in
+#        protocol: tcp
+#        profiles: domain
+#        state: present
+#        enabled: yes
+        
+#    - name: TCP3268 - used for ThinManager to talk to Active Directory
+#      win_firewall_rule:
+#        name: TM_TCP3268
+#        group: ThinManager
+#        localport: 3268
+#        action: allow
+#        direction: in
+#        protocol: tcp
+#        profiles: domain
+#        state: present
+#        enabled: yes
+
