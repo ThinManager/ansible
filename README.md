@@ -21,7 +21,9 @@ The ThinManager MSI was installed separately from the Common Installer in order 
 
 Once installation is completed, the playbook then configures the ThinServer service to run as a domain account that has local Administrator permissions on the host.  The domain account credentials are specified in the tm_service_username and tm_service_password variables.
 
-Lastly, the playbook opens the commonly used ports on the Windows firewall.  The last 2 are commented out but can be included if your deployment will utilize a Docker Container host and/or Active Directory.
+Also, the playbook opens the commonly used ports on the Windows firewall.  The last 2 are commented out but can be included if your deployment will utilize a Docker Container host and/or Active Directory.
+
+Lastly, the win_package Ansible module used to perform the msi and exe installations uses a product_id to identify if the particular package was already installed (idempotency).  These were obtained for each installation by inspecting the XML file stored in the Config directory of the ThinManager and FactoryTalk Activation Manager installation folders.
 
 Configuration Playbook:  thinmanager-config.yaml
 ------------------------------------------------
