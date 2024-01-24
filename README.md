@@ -15,11 +15,11 @@ Terminal command to launch (from location of the thinmanager-install.yaml file):
 
 ansible-playbook thinmanager-install.yaml -e "NODES=thinmanager" -vvv
 
-This playbook installs ThinManager v13.2.0.  You can control the activation method used by ThinManager by setting install_ftam variable in the hosts file.  Setting it to a 1 will install FactoryTalk Activation Manager (FTAM), while setting it to a 0 will use ThinManager Activation (and not install FTAM).  If using FTAM, you can also automatically activate the FTA license by specifying the fta_serial_num, fta_product_key, and fta_qty variables also in the hosts file.  This will require the target host to have access to the Internet to work.  This playbook utilizes the separate install of FactoryTalk Activation Manager (v5.00.13) because this produced more consistent results with Ansible than the FTAM version included in the v13.2.0 installation folder of ThinManager.
+This playbook installs ThinManager v13.2.0.  You can control the activation method used by ThinManager by setting the install_ftam variable in the hosts file.  Setting it to a 1 will install FactoryTalk Activation Manager (FTAM), while setting it to a 0 will use ThinManager Activation (and not install FTAM).  If using FTAM, you can also automatically activate the FTA license by specifying the fta_serial_num, fta_product_key, and fta_qty variables also in the hosts file.  This will require the target host to have access to the Internet to work.  This playbook utilizes the separate install of FactoryTalk Activation Manager (v5.00.13) because this produced more consistent results with Ansible than the FTAM version included in the v13.2.0 installation folder of ThinManager.
 
-We install the ThinManager MSI separate from the Common Installer in order to set the ENABLE_API argument to a 1 so we can automate the initial configuration of ThinManager in a separate playbook.  Once the ThinManager MSI is installed, the playbook will then install FactoryTalk Activation Manager if the install_ftam host variable is set to 1.
+The ThinManager MSI was installed separately from the Common Installer in order to set the ENABLE_API argument to a 1 in order to automate the initial configuration of ThinManager in the separate configuration playbook.  Once the ThinManager MSI is installed, the playbook will then install FactoryTalk Activation Manager if the install_ftam host variable is set to 1.
 
-Once installation is completed, the playbook the configures the ThinServer service to run as a domain account that has local Administrator permissions on the host.  The domain account credentials are specified in the tm_service_username and tm_service_password variables.
+Once installation is completed, the playbook then configures the ThinServer service to run as a domain account that has local Administrator permissions on the host.  The domain account credentials are specified in the tm_service_username and tm_service_password variables.
 
 Lastly, the playbook opens the commonly used ports on the Windows firewall.  The last 2 are commented out but can be included if your deployment will utilize a Docker Container host and/or Active Directory.
 
@@ -39,7 +39,7 @@ With activation handled, the playbook then demonstrates how to create an RDS Dis
 
 https://x.x.x.x:8443/api/documentation
 
-Here you will see all of the REST API endpoints that ThinManager supports, and can try each one out.  By trying out an endpoint in the Swagger UI, you can see what Body each endpoint expects, which can then be used to body_text variable in each play below.
+Here you will see all of the REST API endpoints that ThinManager supports, and can try each one out.  By trying out an endpoint in the Swagger UI, you can see what Body each endpoint expects, which can then be used to set the body_text variable in each REST API play.
 
 The last play in this playbook sets some initial ThinManager Server settings - like enabling the PXE Server and disabling Device Authentication.  This was placed at the end of the playbook because enabling the PXE Server takes more time for ThinManager to process, and subsequent REST API calls made immediately to ThinManager after enabling PXE would sometimes fail.
 
