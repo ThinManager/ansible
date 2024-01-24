@@ -9,8 +9,6 @@ The test bed used to create these playbooks included 2 Windows Server 2019 Stand
 
 In order for Ansible to control Windows hosts, WinRM must be configured on the host.  The [ConfigureRemotingForAnsible.ps1](https://github.com/AlbanAndrieu/ansible-windows/blob/master/files/ConfigureRemotingForAnsible.ps1) script was used to accomplish this.  In order for Ansible to control the Windows host remotely, you will need a Windows account with local Administrator permissions.  These credentials are set in the thinmanager file located in the group_vars folder.  In this file, also note the ansible_winrm_transport variable was set to "ntlm".
 
-You can control what activation method is installed/configured by ThinManager with the install_ftam variable (located in the hosts file).  Setting this to a 1 will install and configure FactoryTalk Activation Manager, while setting this to a 0 will use ThinManager Activation.  If using FactoryTalk Activation, you can also automatically activate your license by specifying the fta_serial_num, fta_product_key, and fta_qty variables (also located in the hosts file).
-
 Install Playbook:  thinmanager-install.yaml
 -------------------------------------------
 Terminal command to launch (from location of the thinmanager-install.yaml file): 
