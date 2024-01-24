@@ -12,6 +12,7 @@ In order for Ansible to control Windows hosts, WinRM must be configured on the h
 Install Playbook:  thinmanager-install.yaml
 -------------------------------------------
 Terminal command to launch (from location of the thinmanager-install.yaml file): 
+
 ansible-playbook thinmanager-install.yaml -e "NODES=thinmanager" -vvv
 
 This playbook installs ThinManager v13.2.0.  You can control the activation method used by ThinManager by setting install_ftam variable in the hosts file.  Setting it to a 1 will install FactoryTalk Activation Manager (FTAM), while setting it to a 0 will use ThinManager Activation (and not install FTAM).  If using FTAM, you can also automatically activate the FTA license by specifying the fta_serial_num, fta_product_key, and fta_qty variables also in the hosts file.  This will require the target host to have access to the Internet to work.  This playbook utilizes the separate install of FactoryTalk Activation Manager (v5.00.13) because this produced more consistent results with Ansible than the FTAM version included in the v13.2.0 installation folder of ThinManager.
@@ -25,6 +26,7 @@ Lastly, the playbook opens the commonly used ports on the Windows firewall.  The
 Configuration Playbook:  thinmanager-config.yaml
 ------------------------------------------------
 Terminal command to launch (from location of the thinmanager-install.yaml file): 
+
 ansible-playbook thinmanager-config.yaml -e "NODES=thinmanager" -vvv
 
 This playbook performs some initial configuration of ThinManager v13.2.0, leveraging the REST API.  It first logs into the ThinManager REST API using the credentials supplied in the tm_service_username_upn and tm_service_password variables.  This initial REST API call returns an API key to be used in the other REST API plays.
