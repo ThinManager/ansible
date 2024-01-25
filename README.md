@@ -1,7 +1,7 @@
 # ansible
 Provides example Ansible playbooks to automate the installation and configuration of ThinManager.
 
-Additionally, there are 2 videos that show the playbooks in action - (1) [using ThinManager Activation (TMA)](https://youtu.be/oaAV2rtJhBU) and (2) [using FactoryTalk Activation (FTA)](https://youtu.be/udUWmjdlNUg).
+Additionally, there are 2 videos that show the playbooks in action - (1) [using ThinManager Activation (TMA)](https://youtu.be/LEKz8uxnscc) and (2) [using FactoryTalk Activation (FTA)](https://youtu.be/42exeCVt2Yo).
 
 There are 2 example playbooks provided - one to install ThinManager (thinmanager-install.yaml), and one to configure ThinManager (thinmanager-config.yaml).
 
